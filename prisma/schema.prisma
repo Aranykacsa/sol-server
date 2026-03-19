@@ -1,0 +1,26 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/$generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Environment {
+  id        String       @id @default(cuid())
+  name      String       @unique
+  createdAt DateTime     @default(now())
+  servers   TestServer[]
+}
+
+model TestServer {
+  id            String       @id @default(cuid())
+  name          String       @unique
+  token         String
+  lastSeen      DateTime?
+  online        Boolean      @default(false)
+  createdAt     DateTime     @default(now())
+  environmentId String?
+  environment   Environment? @relation(fields: [environmentId], references: [id])
+}
