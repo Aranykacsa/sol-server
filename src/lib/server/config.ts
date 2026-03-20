@@ -23,6 +23,9 @@ class Env {
 export type Config = {
 	db: { connectionString: string };
 	agentWs: { token: string | null };
+	logDir: string;
+	auth: { initialAdminPassword: string | null };
+	apiKey: string | null;
 };
 
 export function buildConfig(): Config {
@@ -30,5 +33,10 @@ export function buildConfig(): Config {
 	return {
 		db: { connectionString: env.string('DATABASE_URL') },
 		agentWs: { token: env.string('AGENT_TOKEN', '') || null },
+		logDir: env.string('LOG_DIR', './logs/runs'),
+		auth: {
+			initialAdminPassword: env.string('INITIAL_ADMIN_PASSWORD', '') || null,
+		},
+		apiKey: env.string('API_KEY', '') || null,
 	};
 }

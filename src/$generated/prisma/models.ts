@@ -10,4 +10,5 @@
  */
 export type * from './models/Environment.ts'
 export type * from './models/TestServer.ts'
+export type * from './models/User.ts'
 export type * from './commonInputTypes.ts'

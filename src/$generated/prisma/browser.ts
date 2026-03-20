@@ -27,3 +27,8 @@ export type Environment = Prisma.EnvironmentModel
  * 
  */
 export type TestServer = Prisma.TestServerModel
+/**
+ * Model User
+ * 
+ */
+export type User = Prisma.UserModel

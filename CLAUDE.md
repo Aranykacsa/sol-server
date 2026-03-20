@@ -3,9 +3,9 @@
 ## What this project is
 CI-LIMS (Continuous Integration Lab Information Management System) is a SvelteKit web app that:
 - Manages test server agents connected via WebSocket
-- Controls a shared "switch" state broadcast to all agents
-- Streams real-time test run logs to the browser via SSE
-- Stores agent registrations in PostgreSQL via Prisma
+- Streams real-time test run logs to the browser via SSE and saves them to disk
+- Provides web-based authentication and user management
+- Stores agent registrations and users in PostgreSQL via Prisma
 
 ## Key commands
 ```bash
@@ -29,18 +29,21 @@ bunx prisma generate     # regenerate client after schema changes
 
 | File | Purpose |
 |------|---------|
-| `src/hooks.server.ts` | Routes `/api/tango/*` to tango handler before SvelteKit resolves |
-| `src/lib/server/tango-api.ts` | All tango procedures (`agents.list`, `agents.dispatch`, `agents.register`, `switch.set`) |
+| `src/hooks.server.ts` | Auth guard, API key check, routes `/api/tango/*` to tango handler |
+| `src/lib/server/tango-api.ts` | All tango procedures (`agents.*`, `environments.*`, `users.*`) |
 | `src/lib/tango.ts` | Client-side tango API instance, typed via `Definition` |
-| `src/lib/server/db.ts` | Prisma client singleton (HMR-safe, loads `.env` via `dotenv/config`) |
-| `src/lib/server/state.ts` | In-memory key/value store; broadcasts `STATE_UPDATE` to agents on change |
-| `src/lib/agent-ws.ts` | WS registry, protocol types, heartbeat, `logBus` EventEmitter |
+| `src/lib/server/services/db.ts` | Prisma client singleton (HMR-safe, loads `.env` via `dotenv/config`) |
+| `src/lib/server/services/session.ts` | In-memory session store |
+| `src/lib/server/services/agentWs.ts` | WS registry, protocol types, heartbeat, `logBus`, log file writing |
+| `src/lib/server/modules/users.ts` | User CRUD (bcrypt hashing) |
+| `src/routes/login/` | Login page + server action |
+| `src/routes/logout/+server.ts` | Logout POST handler |
 | `src/routes/api/agent/ws/+server.ts` | HTTP side of WS upgrade (passes to `createAgentWss()`) |
 | `src/routes/api/agent/poll/+server.ts` | Long-poll fallback for agents |
 | `src/routes/api/test-runs/[id]/logs/+server.ts` | SSE log streaming endpoint |
-| `src/routes/+page.svelte` | Home page — switch + agents list |
+| `src/routes/+page.svelte` | Home page — agents list + users management (admin) |
 | `src/routes/+layout.svelte` | Wraps everything in `<AtomForge dark>`, imports `layout.css` |
-| `prisma/schema.prisma` | DB schema (`TestServer` model) |
+| `prisma/schema.prisma` | DB schema (`TestServer`, `Environment`, `User`, `Role`) |
 
 ## How to add a new tango procedure
 
@@ -71,20 +74,21 @@ No other wiring needed — `hooks.server.ts` and `createHandler` do the routing 
 
 App → Agent:
 ```ts
-{ type: 'COMMAND'; deviceId: string; action: 'POWER_ON' | 'POWER_OFF' }
-{ type: 'DISPATCH'; testRunId: string }
-{ type: 'STATE_UPDATE'; key: string; value: unknown }
+{ type: 'COMMAND';    deviceId: string; action: 'POWER_ON' | 'POWER_OFF' }
+{ type: 'DISPATCH';   testRunId: string }
+{ type: 'RUN_SCRIPT'; scriptName: string; runId: string }
 ```
 
 Agent → App:
 ```ts
 { type: 'PING' }
-{ type: 'ACK'; deviceId: string; status: 'ON' | 'OFF'; ts: string }
-{ type: 'STATUS'; testRunId: string; event: string }
-{ type: 'LOG'; testRunId: string; line: string; ts: string }
+{ type: 'ACK';     deviceId: string; status: 'ON' | 'OFF'; ts: string }
+{ type: 'STATUS';  testRunId: string; event: string }
+{ type: 'LOG';     testRunId: string; line: string; ts: string }
+{ type: 'SCRIPTS'; scripts: string[] }
 ```
 
-On connect, agent receives full state snapshot: `{ type: 'STATE_UPDATE', key: '__full__', value: { switch: true/false } }`
+Token is always required on WS connect. No allow-all dev mode.
 
 ## Routes that CANNOT be tango routes
 These use raw streaming protocols and must stay as SvelteKit `+server.ts` routes:
@@ -116,5 +120,8 @@ $effect(() => { /* runs when `on` changes */ });
 ## Required env vars
 ```
 DATABASE_URL=postgresql://user:pass@host:5432/dbname
-AGENT_TOKEN=<optional; if unset in dev, all WS connections are allowed>
+AGENT_TOKEN=<fallback WS token; if unset and no DB record, connections are rejected>
+API_KEY=<optional; required for programmatic Tango RPC via X-Api-Key header>
+INITIAL_ADMIN_PASSWORD=<optional; creates admin user on first startup if no users exist>
+LOG_DIR=./logs/runs  # default; directory for run log files
 ```

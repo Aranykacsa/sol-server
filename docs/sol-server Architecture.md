@@ -153,10 +153,9 @@ ws://[APP_HOST]/api/agent/ws?serverId=<id>&token=<secret>
 
 ### App → Agent messages
 ```ts
-{ type: "COMMAND"; deviceId: string; action: "POWER_ON" | "POWER_OFF" }
-{ type: "DISPATCH"; testRunId: string }
-{ type: "STATE_UPDATE"; key: string; value: unknown }
-// key === "__full__" means the value is the entire state snapshot (sent on connect)
+{ type: "COMMAND";    deviceId: string; action: "POWER_ON" | "POWER_OFF" }
+{ type: "DISPATCH";   testRunId: string }
+{ type: "RUN_SCRIPT"; scriptName: string; runId: string }
 ```
 
 ### Agent → App messages
@@ -172,10 +171,10 @@ ws://[APP_HOST]/api/agent/ws?serverId=<id>&token=<secret>
 - Server checks every 15 seconds; marks agent `OFFLINE` if no `PING` in 90 seconds
 
 ### Token auth
-- Agent passes `token` as query param on connect
-- If `AGENT_TOKEN` env var is set on the server, the token must match exactly
-- If `AGENT_TOKEN` is unset, all connections are accepted (dev/local use)
-- Production: token stored hashed in the `TestServer` DB record (lookup not yet implemented — uses env var comparison for now)
+- Agent passes `token` as query param on connect — **always required**
+- Token is validated via bcrypt lookup in the `TestServer` DB record
+- Falls back to `AGENT_TOKEN` env var if the DB record is not found
+- If no token and no DB record, the connection is **rejected** (no allow-all mode)
 
 ### Long-poll fallback
 ```
@@ -195,13 +194,8 @@ Holds the connection up to 30 seconds. Returns `{ commands: [AppToAgentMessage] 
 | `GET`  | `/api/agent/ws` | Same as above (HTTP fallback for the WS endpoint) |
 | `GET`  | `/api/agent/poll` | Long-poll fallback |
 
-| `GET`  | `/api/switch` | Get current switch value `{ value: boolean }` |
-| `POST` | `/api/switch` | Set switch value, broadcasts `STATE_UPDATE` to all agents |
-
 ### Agent Registration
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/agent/register` | Register or re-register agent: `{ name, token }` → `{ ok, id, name }` |
+All agent management is via Tango RPC (`POST /api/tango`). See `agent-api.md` for full procedure reference.
 
 ### Planned
 | Method | Path | Description |

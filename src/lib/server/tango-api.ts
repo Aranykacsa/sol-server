@@ -44,13 +44,21 @@ const api = {
 		}),
 	},
 
-	switch: {
-		set: tango.command(async (args: { value: boolean }) => {
-			return modules.switch.set(args);
+	users: {
+		list: tango.query(async (_args: undefined) => {
+			return modules.users.list();
 		}),
 
-		get: tango.command(async () => {
-			return modules.switch.get();
+		create: tango.command(async (args: { username: string; password: string; role: 'ADMIN' | 'VIEWER' }) => {
+			return modules.users.create(args);
+		}),
+
+		delete: tango.command(async (args: { id: string }) => {
+			return modules.users.delete(args);
+		}),
+
+		changePassword: tango.command(async (args: { id: string; password: string }) => {
+			return modules.users.changePassword(args);
 		}),
 	},
 };

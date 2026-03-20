@@ -1,7 +1,10 @@
 import { services } from '$lib/server/index.js';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async () => {
+export const load: PageServerLoad = async ({ cookies }) => {
+	const sessionId = cookies.get('__session')!;
+	const session = services.session.get(sessionId)!;
+
 	const [dbServers, environments] = await Promise.all([
 		services.db.client.testServer.findMany({ orderBy: { name: 'asc' }, include: { environment: true } }),
 		services.db.client.environment.findMany({ orderBy: { name: 'asc' } }),
@@ -26,7 +29,7 @@ export const load: PageServerLoad = async () => {
 	const ungrouped = dbServers.filter((s) => s.environmentId === null).map(mapServer);
 
 	return {
-		switchValue: services.state.getState<boolean>('switch') ?? false,
+		currentUser: { username: session.username, role: session.role },
 		grouped,
 		ungrouped,
 	};

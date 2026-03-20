@@ -24,3 +24,16 @@ model TestServer {
   environmentId String?
   environment   Environment? @relation(fields: [environmentId], references: [id])
 }
+
+enum Role {
+  ADMIN
+  VIEWER
+}
+
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  role         Role     @default(VIEWER)
+  createdAt    DateTime @default(now())
+}

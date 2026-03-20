@@ -1,6 +1,8 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { EventEmitter } from 'events';
 import bcrypt from 'bcryptjs';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { IncomingMessage } from 'http';
 import type { Duplex } from 'stream';
 import type { Config } from '../config.js';
@@ -13,7 +15,6 @@ import type { Services } from './index.js';
 export type AppToAgentMessage =
 	| { type: 'COMMAND'; deviceId: string; action: 'POWER_ON' | 'POWER_OFF' }
 	| { type: 'DISPATCH'; testRunId: string }
-	| { type: 'STATE_UPDATE'; key: string; value: unknown }
 	| { type: 'RUN_SCRIPT'; scriptName: string; runId: string };
 
 export type AgentToAppMessage =
@@ -81,7 +82,7 @@ if (!g.__agentHeartbeatStarted) {
 // Factory
 // ---------------------------------------------------------------------------
 
-export function createAgentWsService(cfg: Pick<Config, 'agentWs'>, services: Services): AgentWsService {
+export function createAgentWsService(cfg: Pick<Config, 'agentWs' | 'logDir'>, services: Services): AgentWsService {
 	function bufferRunLog(runId: string, line: string, ts: string, statusEvent?: string) {
 		let buf = runLogs.get(runId);
 		if (!buf) { buf = []; runLogs.set(runId, buf); }
@@ -89,6 +90,12 @@ export function createAgentWsService(cfg: Pick<Config, 'agentWs'>, services: Ser
 		if (statusEvent && (statusEvent === 'PASSED' || statusEvent.startsWith('FAILED') || statusEvent === 'ERROR')) {
 			setTimeout(() => runLogs.delete(runId), 60_000);
 		}
+	}
+
+	function writeLogLine(runId: string, content: string) {
+		const filePath = path.resolve(cfg.logDir, `${runId}.log`);
+		fs.mkdirSync(path.dirname(filePath), { recursive: true });
+		fs.appendFileSync(filePath, content);
 	}
 
 	function send(ws: WebSocket, data: unknown) {
@@ -112,11 +119,13 @@ export function createAgentWsService(cfg: Pick<Config, 'agentWs'>, services: Ser
 				console.info(`[agent-ws] STATUS from ${conn.serverId}: testRun ${msg.testRunId} → ${msg.event}`);
 				bufferRunLog(msg.testRunId, line, ts, msg.event);
 				logBus.emit(msg.testRunId, line, ts);
+				writeLogLine(msg.testRunId, `[${ts}] [STATUS] ${msg.event}\n`);
 				break;
 			}
 			case 'LOG':
 				bufferRunLog(msg.testRunId, msg.line, msg.ts);
 				logBus.emit(msg.testRunId, msg.line, msg.ts);
+				writeLogLine(msg.testRunId, `[${msg.ts}] ${msg.line}\n`);
 				break;
 			case 'SCRIPTS':
 				conn.scripts = msg.scripts;
@@ -148,9 +157,6 @@ export function createAgentWsService(cfg: Pick<Config, 'agentWs'>, services: Ser
 				registry.set(serverId, conn);
 				console.info(`[agent-ws] ${serverId} connected`);
 
-				// Push current state so agent is in sync on connect (lazy access — state is populated by now)
-				send(ws, { type: 'STATE_UPDATE', key: '__full__', value: services.state.getFullState() });
-
 				ws.on('message', (data) => {
 					try {
 						const msg = JSON.parse(data.toString()) as AgentToAppMessage;
@@ -175,6 +181,7 @@ export function createAgentWsService(cfg: Pick<Config, 'agentWs'>, services: Ser
 		},
 
 		async validateToken(serverId: string, token: string): Promise<boolean> {
+			if (!token) return false;
 			try {
 				const record = await services.db.client.testServer.findUnique({ where: { id: serverId } });
 				if (record) return bcrypt.compare(token, record.token);
@@ -182,7 +189,7 @@ export function createAgentWsService(cfg: Pick<Config, 'agentWs'>, services: Ser
 				// DB not reachable — fall through to token fallback
 			}
 			const expected = cfg.agentWs.token;
-			if (!expected) return true; // dev: no DB record and no token → allow all
+			if (!expected) return false;
 			return token === expected;
 		},
 

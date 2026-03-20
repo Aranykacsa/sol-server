@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-A Test Server Agent is a process that runs on a test machine and connects to the sol-server application to receive commands and stream test output. Agents identify themselves with a `serverId` (a CUID assigned at registration) and authenticate with a plain-text token that is stored bcrypt-hashed in the database. The primary transport is WebSocket; agents that cannot establish a WebSocket connection may use the HTTP long-poll fallback instead.
+A Test Server Agent is a process that runs on a test machine and connects to sol-server to receive commands and stream test output. Agents identify themselves with a `serverId` (a CUID assigned at registration) and authenticate with a plain-text token stored bcrypt-hashed in the database. The primary transport is WebSocket; agents that cannot establish a WebSocket connection may use the HTTP long-poll fallback instead.
 
 ---
 
@@ -13,7 +13,7 @@ A Test Server Agent is a process that runs on a test machine and connects to the
 **Tango procedure:** `agents.register` (command)
 **HTTP path:** `POST /api/tango`
 
-Registration stores a bcrypt hash of the supplied token in the database and returns the agent's permanent `serverId`. Call this once before the first connection; call it again to rotate the token.
+This procedure is **public** — it does not require an API key or session cookie. Registration stores a bcrypt hash of the supplied token and returns the agent's permanent `serverId`.
 
 **Request:**
 ```json
@@ -39,15 +39,13 @@ Registration stores a bcrypt hash of the supplied token in the database and retu
 
 ### Token validation chain
 
-When an agent connects, the app validates the token in this order:
+When an agent connects, the token is validated in this order:
 
-1. **DB lookup** — finds the `TestServer` record by `serverId` and runs `bcrypt.compare(token, record.token)`.
-2. **`AGENT_TOKEN` env var** — if the DB is unreachable or the record does not exist, compares the plain-text token against `process.env.AGENT_TOKEN`.
-3. **Allow-all** — if `AGENT_TOKEN` is also unset, every connection is accepted (dev mode).
+1. **Token required** — if no token is provided, the connection is rejected immediately.
+2. **DB lookup** — finds the `TestServer` record by `serverId` and runs `bcrypt.compare(token, record.token)`.
+3. **`AGENT_TOKEN` env var** — if the DB is unreachable or the record does not exist, compares the plain-text token against `AGENT_TOKEN`. If `AGENT_TOKEN` is also unset, the connection is **rejected**.
 
-### Dev shortcut
-
-In development you can skip registration entirely. Connect without a `serverId` query parameter; the app assigns a random UUID for the session. Token validation falls through to allow-all if `AGENT_TOKEN` is not set.
+There is no allow-all dev mode. A valid token is always required.
 
 ---
 
@@ -60,26 +58,15 @@ ws://<host>/api/agent/ws?serverId=<id>&token=<plain-text-token>
 
 - The WS upgrade is handled before SvelteKit routing: by the Vite plugin in dev, by `server.ts` in production.
 - A bad or missing token results in an **HTTP 401** at the upgrade step — the WebSocket is never established.
-- On successful connection the app immediately sends a `STATE_UPDATE` with `key: "__full__"` containing the full current state snapshot, so the agent is in sync before any commands arrive.
+- On successful connection the agent should immediately send a `SCRIPTS` message to announce available scripts.
 
 ### App → Agent messages
 
 | Type | When sent | Required fields |
 |------|-----------|----------------|
-| `STATE_UPDATE` | On connect (`key="__full__"`); whenever any state key changes | `key: string`, `value: unknown` |
 | `COMMAND` | Dashboard or API sends a device command | `deviceId: string`, `action: "POWER_ON" \| "POWER_OFF"` |
 | `DISPATCH` | A test run is triggered | `testRunId: string` |
 | `RUN_SCRIPT` | After `agents.runScript` Tango call | `scriptName: string`, `runId: string` |
-
-**STATE_UPDATE — full snapshot (on connect):**
-```json
-{ "type": "STATE_UPDATE", "key": "__full__", "value": { "switch": true } }
-```
-
-**STATE_UPDATE — single key:**
-```json
-{ "type": "STATE_UPDATE", "key": "switch", "value": false }
-```
 
 **COMMAND:**
 ```json
@@ -118,7 +105,7 @@ ws://<host>/api/agent/ws?serverId=<id>&token=<plain-text-token>
 
 **STATUS:**
 ```json
-{ "type": "STATUS", "testRunId": "clrun9876543210abcdef", "event": "suite:started" }
+{ "type": "STATUS", "testRunId": "clrun9876543210abcdef", "event": "STARTED" }
 ```
 
 **LOG:**
@@ -154,34 +141,16 @@ GET /api/agent/poll?serverId=<id>
 - The agent must **immediately re-poll** after each response to avoid missing commands.
 - Returns **HTTP 400** if `serverId` is missing.
 - Commands queued while no poll is open are **dropped** — the WebSocket transport is strongly preferred.
-- Does not support streaming `LOG` frames; use the SSE endpoint for log output.
-
-**Timeout response:**
-```json
-{ "commands": [] }
-```
-
-**Command delivery response:**
-```json
-{ "commands": [{ "type": "DISPATCH", "testRunId": "clrun9876543210abcdef" }] }
-```
 
 ---
 
 ## 5. SSE Log Stream
 
-Clients (browser dashboard, CI runners) subscribe to a test run's log output via Server-Sent Events. The agent drives this stream by sending `LOG` frames over its WebSocket connection.
+Clients subscribe to a test run's log output via Server-Sent Events. The agent drives this stream by sending `LOG` frames over its WebSocket connection. Logs are also written to disk at `{LOG_DIR}/{runId}.log` on the server for archival.
 
 **URL:**
 ```
 GET /api/test-runs/<testRunId>/logs
-```
-
-**Response headers:**
-```
-Content-Type: text/event-stream
-Cache-Control: no-cache
-Connection: keep-alive
 ```
 
 **Each log event:**
@@ -190,84 +159,58 @@ data: {"line":"PASS src/foo.test.ts","ts":"2026-03-16T12:00:01.234Z"}
 
 ```
 
-**Keep-alive comment** (every 15 s, prevents proxy timeouts):
+**Keep-alive comment** (every 15 s):
 ```
 : keep-alive
 
 ```
 
 - The stream stays open until the client disconnects.
-- Logs are **buffered per `runId`** in memory on the server. An SSE subscriber that connects after the agent has already emitted lines receives all buffered lines immediately on connect, then live lines from that point on. Buffers are cleaned up 60 s after the run completes (`PASSED`, `FAILED*`, or `ERROR` status event).
+- Logs are **buffered per `runId`** in memory on the server. Late SSE subscribers receive all buffered lines on connect. Buffers are cleaned up 60 s after the run completes.
 - `STATUS` frames are also forwarded to SSE subscribers as `[status] <event>` lines.
+
+### Log file format
+
+Each run produces a file at `{LOG_DIR}/{runId}.log` (default `./logs/runs/{runId}.log`):
+```
+[2026-03-16T12:00:00.000Z] [STATUS] STARTED
+[2026-03-16T12:00:01.234Z] PASS src/foo.test.ts
+[2026-03-16T12:00:02.000Z] [STATUS] PASSED
+```
 
 ---
 
-## 6. Tango-RPC Reference
+## 6. Tango-RPC Authentication
 
-All procedures share the same HTTP endpoint:
+All Tango procedures (except `agents.register`) require authentication via one of:
 
-```
+1. **Valid session cookie** (`__session`) — set after logging in at `/login`
+2. **`X-Api-Key` header** — must match the `API_KEY` environment variable
+
+```http
 POST /api/tango
+X-Api-Key: your-api-key
 Content-Type: application/json
-
-{ "proc": "<namespace>.<procedure>", "args": <args> }
 ```
 
-### Procedures relevant to agents
+Requests without valid auth receive **HTTP 401**.
 
-| Procedure | Type | Purpose |
-|-----------|------|---------|
-| `agents.register` | command | Register or rotate token; returns `{ id, name }` |
-| `agents.list` | query | List all registered servers with live online status |
-| `agents.dispatch` | command | Send a `COMMAND` or `DISPATCH` to one or all agents |
-| `agents.runScript` | command | Send `RUN_SCRIPT` to an agent; returns `{ runId }` for SSE subscription |
-| `agents.getScripts` | command | Get the script list last reported by a connected agent |
-| `switch.set` | command | Update the shared switch value and broadcast `STATE_UPDATE` |
-| `switch.get` | command | Read the current switch value |
+### Tango procedure reference
 
-### `agents.register`
-
-**Request args:**
-```json
-{ "name": "rack-01", "token": "my-secret-token" }
-```
-**Response:**
-```json
-{ "id": "clxyz1234567890abcdef", "name": "rack-01" }
-```
-Upserts by `name` — safe to call on every startup to rotate the token.
-
-### `agents.dispatch`
-
-Sends a message to one specific agent (by `serverId`) or broadcasts to all connected agents.
-
-**Send to one agent:**
-```json
-{
-  "serverId": "clxyz1234567890abcdef",
-  "type": "COMMAND",
-  "deviceId": "device-42",
-  "action": "POWER_ON"
-}
-```
-**Response:**
-```json
-{ "ok": true, "serverId": "clxyz1234567890abcdef" }
-```
-
-**Broadcast to all agents:**
-```json
-{
-  "type": "DISPATCH",
-  "testRunId": "clrun9876543210abcdef"
-}
-```
-**Response:**
-```json
-{ "ok": true, "broadcast": true }
-```
-
-If the targeted agent is not connected, the procedure throws an error.
+| Procedure | Type | Auth required | Purpose |
+|-----------|------|--------------|---------|
+| `agents.register` | command | No | Register or rotate token; returns `{ id, name }` |
+| `agents.list` | query | Yes | List all registered servers with live online status |
+| `agents.dispatch` | command | Yes | Send a `COMMAND` or `DISPATCH` to one or all agents |
+| `agents.runScript` | command | Yes | Send `RUN_SCRIPT` to an agent; returns `{ runId }` |
+| `agents.getScripts` | command | Yes | Get the script list last reported by a connected agent |
+| `environments.list` | query | Yes | List all environments |
+| `environments.create` | command | Yes | Create an environment |
+| `environments.delete` | command | Yes | Delete an environment |
+| `users.list` | query | Yes | List all users |
+| `users.create` | command | Yes | Create a user |
+| `users.delete` | command | Yes | Delete a user |
+| `users.changePassword` | command | Yes | Change a user's password |
 
 ---
 
@@ -276,15 +219,13 @@ If the targeted agent is not connected, the procedure throws an error.
 ```
 Agent                                    App
   |                                        |
-  |-- POST /api/tango (agents.register) -->|
+  |-- POST /api/tango (agents.register) -->|   [no auth required]
   |<-- { id: "clxyz...", name: "..." } ----|   [save id + token]
   |                                        |
   |-- WS upgrade: /api/agent/ws           |
   |   ?serverId=clxyz...&token=secret ---->|   [validateToken → bcrypt.compare]
   |<-- HTTP 101 Switching Protocols -------|
   |                                        |
-  |<-- STATE_UPDATE key="__full__"         |   [full state snapshot on connect]
-  |    { switch: true }                    |
   |-- SCRIPTS { scripts: ["..."] } ------->   [on connect: list of available scripts]
   |                                        |
   |-- PING -------------------------------->   [every ~30 s]
@@ -294,17 +235,14 @@ Agent                                    App
   |-- ACK { deviceId, status, ts } ------->
   |                                        |
   |<-- DISPATCH { testRunId } -------------|   [test run triggered]
-  |-- STATUS { testRunId, event } -------->   [run progress]
-  |-- LOG { testRunId, line, ts } -------->   [each output line, buffered + forwarded to SSE]
-  |-- LOG { testRunId, line, ts } -------->
-  |-- STATUS { testRunId, event:"done" } ->
+  |-- STATUS { testRunId, "STARTED" } ---->   [run progress]
+  |-- LOG { testRunId, line, ts } -------->   [each output line → buffered + SSE + log file]
+  |-- STATUS { testRunId, "PASSED" } ----->
   |                                        |
   |<-- RUN_SCRIPT { scriptName, runId } ---|   [browser triggers script run]
-  |-- STATUS { runId, event:"STARTED" } -->
-  |-- LOG { runId, line, ts } ------------>   [each output line, buffered + forwarded to SSE]
-  |-- STATUS { runId, event:"PASSED" } --->
-  |                                        |
-  |<-- STATE_UPDATE { key:"switch", ... } -|   [broadcast when switch changes]
+  |-- STATUS { runId, "STARTED" } -------->
+  |-- LOG { runId, line, ts } ------------>   [each output line → buffered + SSE + log file]
+  |-- STATUS { runId, "PASSED" } --------->
   |                                        |
 ```
 
@@ -316,8 +254,7 @@ Agent                                    App
 |--|-------------|------------|
 | **WS URL** | `ws://localhost:5173/api/agent/ws` | `ws://<host>:<PORT>/api/agent/ws` |
 | **HTTP base** | `http://localhost:5173` | `http://<host>:<PORT>` (default `PORT=3000`) |
-| **Token validation** | Allows all connections if `AGENT_TOKEN` is unset | Requires a valid DB record or `AGENT_TOKEN` env var |
-| **Registration** | Optional — connect without `serverId` for a session UUID | Recommended — persist `serverId` and rotate token on deploy |
+| **Token validation** | Requires valid DB record or `AGENT_TOKEN` | Same — no allow-all mode |
 | **WS upgrade handler** | Vite plugin (`vite.config.ts`) | `server.ts` wraps SvelteKit adapter |
 
 ---
@@ -326,11 +263,10 @@ Agent                                    App
 
 | Scenario | Behaviour |
 |----------|-----------|
-| Bad or missing token at WS upgrade | HTTP 401 — WebSocket is never established |
-| No `PING` received for 90 s | Agent marked `online: false`; connection stays open; recovers on next `PING` |
+| Missing or invalid token at WS upgrade | HTTP 401 — WebSocket is never established |
+| Tango request without auth | HTTP 401 |
+| No `PING` received for 90 s | Agent marked `online: false`; connection stays open |
 | Malformed JSON WebSocket frame | Silently ignored |
-| `agents.dispatch` to offline/disconnected agent | Tango error: `"Agent <id> is not connected"` |
+| `agents.dispatch` to offline agent | Tango error: `"Agent <id> is not connected"` |
 | Long-poll timeout (30 s, no command) | `{ "commands": [] }` — re-poll immediately |
 | Missing `serverId` on poll request | HTTP 400 |
-| Command queued while no poll is open | Command is dropped — prefer WebSocket |
-| No SSE subscriber when LOG arrives | Log line is **buffered** — late SSE subscribers receive all buffered lines on connect |
