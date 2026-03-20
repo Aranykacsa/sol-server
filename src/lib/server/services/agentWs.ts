@@ -64,6 +64,7 @@ const HEARTBEAT_TIMEOUT_MS = 90_000;
 if (!g.__runLogs) g.__runLogs = new Map<string, Array<{ line: string; ts: string }>>();
 const runLogs = g.__runLogs as Map<string, Array<{ line: string; ts: string }>>;
 
+
 if (!g.__agentHeartbeatStarted) {
 	g.__agentHeartbeatStarted = true;
 	const interval = setInterval(() => {
@@ -92,8 +93,14 @@ export function createAgentWsService(cfg: Pick<Config, 'agentWs' | 'logDir'>, se
 		}
 	}
 
-	function writeLogLine(runId: string, content: string) {
-		const filePath = path.resolve(cfg.logDir, `${runId}.log`);
+	function sanitizeId(id: string) {
+		return id.replace(/[^a-zA-Z0-9_-]/g, '_');
+	}
+
+	function writeLogLine(runId: string, content: string, serverId: string) {
+		const date = new Date().toISOString().slice(0, 10);
+		const fileName = `${date}_${sanitizeId(serverId)}_${runId}.log`;
+		const filePath = path.resolve(cfg.logDir, fileName);
 		fs.mkdirSync(path.dirname(filePath), { recursive: true });
 		fs.appendFileSync(filePath, content);
 	}
@@ -119,13 +126,13 @@ export function createAgentWsService(cfg: Pick<Config, 'agentWs' | 'logDir'>, se
 				console.info(`[agent-ws] STATUS from ${conn.serverId}: testRun ${msg.testRunId} → ${msg.event}`);
 				bufferRunLog(msg.testRunId, line, ts, msg.event);
 				logBus.emit(msg.testRunId, line, ts);
-				writeLogLine(msg.testRunId, `[${ts}] [STATUS] ${msg.event}\n`);
+				writeLogLine(msg.testRunId, `[${ts}] [STATUS] ${msg.event}\n`, conn.serverId);
 				break;
 			}
 			case 'LOG':
 				bufferRunLog(msg.testRunId, msg.line, msg.ts);
 				logBus.emit(msg.testRunId, msg.line, msg.ts);
-				writeLogLine(msg.testRunId, `[${msg.ts}] ${msg.line}\n`);
+				writeLogLine(msg.testRunId, `[${msg.ts}] ${msg.line}\n`, conn.serverId);
 				break;
 			case 'SCRIPTS':
 				conn.scripts = msg.scripts;
