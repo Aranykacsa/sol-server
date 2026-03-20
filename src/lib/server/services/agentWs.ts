@@ -64,6 +64,9 @@ const HEARTBEAT_TIMEOUT_MS = 90_000;
 if (!g.__runLogs) g.__runLogs = new Map<string, Array<{ line: string; ts: string }>>();
 const runLogs = g.__runLogs as Map<string, Array<{ line: string; ts: string }>>;
 
+if (!g.__runStartTimes) g.__runStartTimes = new Map<string, string>();
+const runStartTimes = g.__runStartTimes as Map<string, string>;
+
 
 if (!g.__agentHeartbeatStarted) {
 	g.__agentHeartbeatStarted = true;
@@ -89,7 +92,10 @@ export function createAgentWsService(cfg: Pick<Config, 'agentWs' | 'logDir'>, se
 		if (!buf) { buf = []; runLogs.set(runId, buf); }
 		buf.push({ line, ts });
 		if (statusEvent && (statusEvent === 'PASSED' || statusEvent.startsWith('FAILED') || statusEvent === 'ERROR')) {
-			setTimeout(() => runLogs.delete(runId), 60_000);
+			setTimeout(() => {
+				runLogs.delete(runId);
+				runStartTimes.delete(runId);
+			}, 60_000);
 		}
 	}
 
@@ -98,8 +104,12 @@ export function createAgentWsService(cfg: Pick<Config, 'agentWs' | 'logDir'>, se
 	}
 
 	function writeLogLine(runId: string, content: string, serverId: string) {
-		const date = new Date().toISOString().slice(0, 10);
-		const fileName = `${date}_${sanitizeId(serverId)}_${runId}.log`;
+		if (!runStartTimes.has(runId)) {
+			const iso = new Date().toISOString();
+			runStartTimes.set(runId, `${iso.slice(0, 10)}_${iso.slice(11, 16).replace(':', '-')}`);
+		}
+		const dateTime = runStartTimes.get(runId)!;
+		const fileName = `${dateTime}_${sanitizeId(serverId)}_${runId}.log`;
 		const filePath = path.resolve(cfg.logDir, fileName);
 		fs.mkdirSync(path.dirname(filePath), { recursive: true });
 		fs.appendFileSync(filePath, content);

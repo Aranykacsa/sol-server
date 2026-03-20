@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { PageData } from './$types';
-	import { Badge, Button } from '@atom-forge/ui';
+	import { Badge, Button, Input, Select } from '@atom-forge/ui';
 	import { api } from '$lib/tango.js';
 
 	let { data }: { data: PageData } = $props();
@@ -52,7 +52,7 @@
 			<span class="text-xs text-muted-c">{data.currentUser.username}</span>
 			<Badge>{data.currentUser.role}</Badge>
 			<form method="POST" action="/logout">
-				<button type="submit" class="text-xs text-muted-c underline hover:text-control-c">Sign out</button>
+				<Button ghost small type="submit">Sign out</Button>
 			</form>
 		</div>
 	</div>
@@ -77,7 +77,7 @@
 								{#each env.agents as agent (agent.id)}
 									<li>
 										<a
-											href="/test-runs/{agent.id}"
+											href="/agent/{agent.id}"
 											class="flex items-center gap-3 rounded-lg border border-canvas bg-raised px-4 py-3 transition-colors duration-150 hover:border-canvas/70 hover:bg-raised/70"
 										>
 											<span
@@ -106,7 +106,7 @@
 							{#each data.ungrouped as agent (agent.id)}
 								<li>
 									<a
-										href="/test-runs/{agent.id}"
+										href="/agent/{agent.id}"
 										class="flex items-center gap-3 rounded-lg border border-canvas bg-raised px-4 py-3 transition-colors duration-150 hover:border-canvas/70 hover:bg-raised/70"
 									>
 										<span
@@ -144,24 +144,9 @@
 					<div class="flex flex-col gap-3 rounded-lg border border-canvas bg-raised p-4">
 						<span class="text-xs font-medium text-muted-c uppercase">New User</span>
 						<div class="flex gap-2">
-							<input
-								bind:value={newUsername}
-								placeholder="username"
-								class="flex-1 rounded border border-canvas bg-base px-3 py-1.5 text-sm text-control-c outline-none focus:border-accent"
-							/>
-							<input
-								bind:value={newPassword}
-								type="password"
-								placeholder="password"
-								class="flex-1 rounded border border-canvas bg-base px-3 py-1.5 text-sm text-control-c outline-none focus:border-accent"
-							/>
-							<select
-								bind:value={newRole}
-								class="rounded border border-canvas bg-base px-3 py-1.5 text-sm text-control-c outline-none"
-							>
-								<option value="VIEWER">Viewer</option>
-								<option value="ADMIN">Admin</option>
-							</select>
+							<Input bind:value={newUsername} placeholder="username" class="flex-1" />
+							<Input bind:value={newPassword} type="password" placeholder="password" class="flex-1" />
+							<Select bind:value={newRole} options={[{ value: 'VIEWER', label: 'Viewer' }, { value: 'ADMIN', label: 'Admin' }]} />
 							<Button small onclick={createUser}>Add</Button>
 						</div>
 						{#if userError}

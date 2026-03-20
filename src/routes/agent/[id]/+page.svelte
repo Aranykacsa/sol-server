@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { page } from '$app/stores';
-	import { onDestroy, onMount } from 'svelte';
-	import { Badge, Button } from '@atom-forge/ui';
-	import { api } from '$lib/tango.js';
-	import type { PageData } from './$types';
+	import {page} from '$app/stores';
+	import {onDestroy, onMount} from 'svelte';
+	import {Badge, Button} from '@atom-forge/ui';
+	import {api} from '$lib/tango.js';
+	import type {PageData} from './$types';
 
 	let { data }: { data: PageData } = $props();
 
@@ -57,8 +57,7 @@
 
 	function handleScroll(t: Terminal) {
 		if (!t.viewport) return;
-		const atBottom = t.viewport.scrollHeight - t.viewport.scrollTop - t.viewport.clientHeight < 40;
-		t.autoScroll = atBottom;
+		t.autoScroll = t.viewport.scrollHeight - t.viewport.scrollTop - t.viewport.clientHeight < 40;
 	}
 
 	function terminalStatusColor(t: Terminal): 'accent' | 'red' | undefined {
@@ -173,13 +172,7 @@
 									↓
 								</Button>
 							{/if}
-							<button
-								class="ml-1 text-muted-c hover:text-control-c"
-								onclick={() => closeTerminal(t)}
-								aria-label="Close terminal"
-							>
-								×
-							</button>
+							<Button micro ghost onclick={() => closeTerminal(t)} aria-label="Close terminal">×</Button>
 						</div>
 
 						<!-- Log output -->
@@ -199,8 +192,8 @@
 							{:else}
 								{#each t.lines as { line, ts }, i (i)}
 									<div class="flex gap-3 leading-5">
-										<span class="w-24 shrink-0 select-none text-muted-c"
-											>{new Date(ts).toISOString().slice(11, 23)}</span
+										<span class="w-36 shrink-0 select-none text-muted-c"
+											>{new Date(ts).toISOString().slice(0, 10)} {new Date(ts).toISOString().slice(11, 16)}</span
 										>
 										<span class="whitespace-pre-wrap break-all text-control-c">{line}</span>
 									</div>
